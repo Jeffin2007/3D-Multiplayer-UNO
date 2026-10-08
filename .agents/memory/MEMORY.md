@@ -1,0 +1,1 @@
+- [UNO deck composition](uno-deck-composition.md) — preserve the requested 108-card deck total by using two copies of each colored action card.

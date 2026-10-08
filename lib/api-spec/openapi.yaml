@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: games
+    description: Multiplayer UNO game rooms and actions
 paths:
   /healthz:
     get:
@@ -24,6 +26,189 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /games:
+    post:
+      operationId: createGame
+      tags: [games]
+      summary: Create a new UNO room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGameInput"
+      responses:
+        "201":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Invalid player name
+  /games/{code}/players/{playerId}:
+    get:
+      operationId: getGame
+      tags: [games]
+      summary: Get a room state for one player
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: playerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current game state, including only the requesting player's hand
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "404":
+          description: Room or player not found
+  /games/{code}/join:
+    post:
+      operationId: joinGame
+      tags: [games]
+      summary: Join an existing room
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinGameInput"
+      responses:
+        "200":
+          description: Player joined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Room is full or already started
+        "404":
+          description: Room not found
+  /games/{code}/start:
+    post:
+      operationId: startGame
+      tags: [games]
+      summary: Start the room after at least two players join
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlayerAction"
+      responses:
+        "200":
+          description: Game started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Game cannot be started yet
+        "403":
+          description: Only the host can start the game
+  /games/{code}/play:
+    post:
+      operationId: playCard
+      tags: [games]
+      summary: Play a card
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlayCardInput"
+      responses:
+        "200":
+          description: Card played
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Card is not a legal play or an UNO call is required
+        "403":
+          description: It is not this player's turn
+  /games/{code}/draw:
+    post:
+      operationId: drawCard
+      tags: [games]
+      summary: Draw one card
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlayerAction"
+      responses:
+        "200":
+          description: Card drawn or the turn ended because the drawn card was not playable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: A card was already drawn this turn
+        "403":
+          description: It is not this player's turn
+  /games/{code}/pass:
+    post:
+      operationId: passTurn
+      tags: [games]
+      summary: End a turn after choosing not to play a playable drawn card
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlayerAction"
+      responses:
+        "200":
+          description: Turn ended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: No drawn card is awaiting a decision
 components:
   schemas:
     HealthStatus:
@@ -33,4 +218,109 @@ components:
           type: string
       required:
         - status
+    UnoColor:
+      type: string
+      enum: [red, yellow, green, blue]
+    CardKind:
+      type: string
+      enum: [number, skip, reverse, draw2, wild, wild4]
+    GameStatus:
+      type: string
+      enum: [lobby, playing, finished]
+    GameCard:
+      type: object
+      properties:
+        id: { type: string }
+        color: { type: ["string", "null"], enum: [red, yellow, green, blue, null] }
+        kind: { $ref: "#/components/schemas/CardKind" }
+        value: { type: ["integer", "null"] }
+        label: { type: string }
+      required: [id, color, kind, value, label]
+    GamePlayer:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        handCount: { type: integer }
+        isHost: { type: boolean }
+        isYou: { type: boolean }
+      required: [id, name, handCount, isHost, isYou]
+    GameState:
+      type: object
+      properties:
+        code: { type: string }
+        status: { $ref: "#/components/schemas/GameStatus" }
+        hostPlayerId: { type: string }
+        youPlayerId: { type: string }
+        players:
+          type: array
+          items: { $ref: "#/components/schemas/GamePlayer" }
+        yourHand:
+          type: array
+          items: { $ref: "#/components/schemas/GameCard" }
+        topCard:
+          oneOf:
+            - $ref: "#/components/schemas/GameCard"
+            - type: "null"
+        currentColor:
+          oneOf:
+            - $ref: "#/components/schemas/UnoColor"
+            - type: "null"
+        currentPlayerId:
+          type: ["string", "null"]
+        direction:
+          type: string
+          enum: [clockwise, counterclockwise]
+        drawPileCount: { type: integer }
+        hasDrawn: { type: boolean }
+        drawnCardId:
+          type: ["string", "null"]
+        winnerId:
+          type: ["string", "null"]
+        lastAction:
+          type: ["string", "null"]
+        canStart: { type: boolean }
+      required:
+        - code
+        - status
+        - hostPlayerId
+        - youPlayerId
+        - players
+        - yourHand
+        - topCard
+        - currentColor
+        - currentPlayerId
+        - direction
+        - drawPileCount
+        - hasDrawn
+        - drawnCardId
+        - winnerId
+        - lastAction
+        - canStart
+    CreateGameInput:
+      type: object
+      properties:
+        playerName: { type: string, minLength: 1, maxLength: 20 }
+      required: [playerName]
+    JoinGameInput:
+      type: object
+      properties:
+        playerName: { type: string, minLength: 1, maxLength: 20 }
+      required: [playerName]
+    PlayerAction:
+      type: object
+      properties:
+        playerId: { type: string, minLength: 1 }
+      required: [playerId]
+    PlayCardInput:
+      type: object
+      properties:
+        playerId: { type: string, minLength: 1 }
+        cardId: { type: string, minLength: 1 }
+        chosenColor:
+          oneOf:
+            - $ref: "#/components/schemas/UnoColor"
+            - type: "null"
+        declareUno: { type: boolean }
+      required: [playerId, cardId, declareUno]
 

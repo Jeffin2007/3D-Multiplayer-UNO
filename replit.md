@@ -1,10 +1,11 @@
-# [Project name]
+# UNO Arena
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A shareable browser game where 2–10 friends meet by room code and play a polished, rule-checked game of UNO.
 
 ## Run & Operate
 
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/uno-arena run typecheck` — typecheck the game frontend
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -22,15 +23,23 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/uno-arena/src/App.tsx` — create/join flow, room UI, client polling, and audio controls
+- `artifacts/uno-arena/src/index.css` — game theme, card styling, responsive layout, and motion
+- `artifacts/api-server/src/lib/uno-game.ts` — authoritative deck, turn, and play rules
+- `artifacts/api-server/src/routes/games.ts` — validated room and game actions
+- `lib/api-spec/openapi.yaml` — API source of truth
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The API server is the source of truth for legal plays, turn order, and private hands; clients poll room state about once per second.
+- Game rooms are intentionally transient and held in the API process; an API restart clears active games.
+- The supplied 108-card total implies two copies per color for Skip, Reverse, and Draw Two, despite the brief's conflicting “one per color” wording.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Create or join a private room with a six-character code; start with 2–10 players.
+- Play with a 108-card deck, personal hands, special-card effects, Wild color choice, UNO declaration, and automatic turn checks.
+- Optional ambient sound, volume control, responsive table, animated cards, and reconnecting from saved room identity.
 
 ## User preferences
 
@@ -38,7 +47,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Room codes are six characters; active rooms do not survive an API process restart.
+- Wild Draw Four is rejected whenever the player still holds a card matching the current color.
 
 ## Pointers
 

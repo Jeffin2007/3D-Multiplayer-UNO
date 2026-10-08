@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "UNO Arena"
+description = "A distinctive browser-based multiplayer UNO game for friends. Create or join 2–10 player rooms, play with synchronized turns and rule-checked cards, and enjoy tactile animated cards with optional sound and music."
+version = "1.0.0"
+id = "artifacts/uno-arena"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23838
+
+[services.development]
+run = "pnpm --filter @workspace/uno-arena run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/uno-arena", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/uno-arena/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23838"
+BASE_PATH = "/"

@@ -1,0 +1,92 @@
+You are a full-stack web developer building an interactive 3D multiplayer UNO card game website. Your task is to create a fully functional, visually distinctive game platform with custom animations, effects, and audio that sets it apart from existing UNO implementations.
+
+**Core Requirements**
+
+Build an interactive 3D web-based UNO game where:
+- 2–10 players can join using a unique team code (one player generates the code; others enter it to join the same game)
+- Players are dealt 7 cards at the start
+- Gameplay follows official UNO rules exactly as specified below
+- The interface is visually distinctive, modern, and immersive — avoid mimicking existing UNO apps or websites
+- Animations, visual effects, and background music enhance engagement without becoming distracting
+
+**Game Rules Implementation**
+
+Implement these rules as hard constraints in your game logic:
+
+**Card Types & Deck Composition**
+- 76 number cards: 0 (×1 per color), 1–9 (×2 per color) in red, yellow, green, blue
+- 8 Skip cards (one per color)
+- 8 Reverse cards (one per color)
+- 8 Draw Two (+2) cards (one per color)
+- 4 Wild cards (color-agnostic)
+- 4 Wild Draw Four (+4) cards (color-agnostic)
+- Total: 108 cards
+
+**Valid Plays**
+A player may play a card only if it matches the top discard card by:
+- Color (e.g., Red 7 on Red 3)
+- Number/symbol (e.g., Green 7 on Red 7, or Red Skip on Blue Skip)
+- Wild cards are always playable
+
+**Drawing**
+If no playable card exists or the player chooses not to play:
+1. Draw one card from the Draw Pile
+2. If drawable card is playable, the player may play it immediately
+3. Otherwise, turn ends
+- Enforce this in the UI: limit draws to one per turn unless a +2 or +4 is in effect
+
+**Special Cards**
+
+Skip: Next player's turn is skipped.
+
+Reverse: Direction of play reverses.
+- Exception: In 2-player games, Reverse acts as a Skip (same player goes again)
+
+Draw Two (+2): Next player draws 2 cards and loses their turn.
+
+Wild: Player selects the next active color from a modal.
+- Display an intuitive color-picker immediately after the card is played
+
+Wild Draw Four (+4): Player selects a color; next player draws 4 cards and loses their turn.
+- **Critical rule**: +4 is playable only if the player has no cards matching the current color. Enforce this validation.
+
+**UNO Call**
+When a player has exactly 1 card remaining, they must call "UNO!" Display a prominent, animated UNO announcement with celebratory effects and audio cue when triggered.
+
+**Technical & Design Requirements**
+
+**3D & Visual Distinctive**
+- Use 3D rendering (Three.js, Babylon.js, or similar) to create a unique card visualization and game board
+- Cards should feel tactile and interactive — avoid flat, 2D card representations
+- Animations should be smooth and polished: card dealing, card flipping, play animations, player turn transitions
+- Custom color scheme and styling that distinguishes this from existing UNO games
+
+**Multiplayer & Team Code System**
+- One player generates a unique team code
+- Other players enter the code to join the same game session
+- Implement real-time synchronization (WebSocket or similar) so all players see the same game state
+- Clearly display whose turn it is and the current playable color
+
+**Audio & Effects**
+- Background music that loops without becoming annoying (volume control essential)
+- Sound effects for: card plays, draws, special actions (+2, +4, Skip, Reverse), UNO calls, turn transitions, and game end
+- Effects should enhance immersion, not clutter the experience
+
+**UI/UX**
+- Intuitive hand display showing player cards
+- Clear indication of whose turn it is
+- Visible discard and draw piles
+- Player order indicator showing direction (clockwise/counterclockwise)
+- Modal or overlay for color selection after Wild/+4 plays
+- Game state display: current color, cards remaining per player, draw pile size
+- Start/end game screens with clear join/create code flows
+
+**Technology Stack** (recommend)
+- Frontend: React, Vue, or similar for state management
+- 3D rendering: Three.js or Babylon.js
+- Backend: Node.js/Express, Python/Flask, or similar for real-time game logic
+- Real-time communication: Socket.io, WebSocket, or similar
+- Styling: CSS3 with animations, or Tailwind + custom effects
+
+**Deliverable**
+A fully playable, production-ready UNO game website that can be deployed and accessed via browser. The game should be enjoyable, visually engaging, and faithful to official UNO rules with the added polish of custom effects and audio that make it feel premium and distinct from existing implementations.
