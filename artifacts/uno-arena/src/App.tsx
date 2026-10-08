@@ -15,6 +15,7 @@ import type { GameCard, GameState, UnoColor } from '@workspace/api-client-react'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
 type RoomIdentity = { code: string; playerId: string };
+type ActionReaction = { emoji: string; label: string; mood: 'sad' | 'tense' | 'playful' | 'wild'; key: string };
 const STORAGE_KEY = 'uno-arena-room';
 const readIdentity = (): RoomIdentity | null => {
   try { const value = localStorage.getItem(STORAGE_KEY); return value ? JSON.parse(value) as RoomIdentity : null; } catch { return null; }
@@ -141,7 +142,7 @@ function ThreeTable() {
 }
 
 function CardFace({ card }: { card: GameCard }) {
-  return <div className={`playing-card ${cardColorClass(card)}`} aria-label={`${colorName(card.color)} ${card.label}`}><span className="card-corner">{card.label}</span><span>{cardFace(card)}</span></div>;
+  return <div className={`playing-card ${cardColorClass(card)}`} aria-label={`${colorName(card.color)} ${card.label}`}><span className="card-corner" aria-hidden="true">{card.label}</span><span className="card-symbol" aria-hidden="true">{cardFace(card)}</span></div>;
 }
 
 function MusicControls() {
@@ -218,7 +219,10 @@ function GameRoom() {
   const [colorCard, setColorCard] = useState<GameCard | null>(null);
   const [soundPulse, setSoundPulse] = useState(0);
   const [unoFlash, setUnoFlash] = useState(false);
+  const [actionReaction, setActionReaction] = useState<ActionReaction | null>(null);
   const observedAction = useRef<string | null>(null);
+  const sfxAudioRef = useRef<AudioContext | null>(null);
+  const reactionTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
   const playerId = identity?.playerId || '';
@@ -233,6 +237,15 @@ function GameRoom() {
   const actionKey = state
     ? `${state.code}|${state.lastAction ?? ''}|${state.topCard?.id ?? ''}|${state.currentPlayerId ?? ''}|${state.drawPileCount}|${state.players.map((player) => player.handCount).join(',')}`
     : null;
+  const primeSfxAudio = useCallback(() => {
+    if (typeof window.AudioContext === 'undefined') return;
+    let audio = sfxAudioRef.current;
+    if (!audio || audio.state === 'closed') {
+      audio = new window.AudioContext();
+      sfxAudioRef.current = audio;
+    }
+    if (audio.state === 'suspended') void audio.resume().catch(() => undefined);
+  }, []);
 
   const updateFromAction = useCallback((next: GameState) => {
     queryClient.setQueryData(getGetGameQueryKey(next.code, next.youPlayerId), next);
@@ -248,43 +261,72 @@ function GameRoom() {
     observedAction.current = actionKey;
     if (previous === null || previous === actionKey) return;
     setSoundPulse((n) => n + 1);
-    if (state.lastAction?.includes('called UNO')) {
+    const action = state.lastAction?.toLowerCase() ?? '';
+    if (action.includes('called uno')) {
       setUnoFlash(true);
       window.setTimeout(() => setUnoFlash(false), 1900);
+    }
+    if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
+    const reaction = action.includes('played +4')
+      ? { emoji: '😭', label: 'FOUR CARDS. OOF.', mood: 'sad' as const }
+      : action.includes('played +2')
+        ? { emoji: '😬', label: 'TWO MORE CARDS', mood: 'tense' as const }
+        : action.includes('skipped')
+          ? { emoji: '😎', label: 'YOU’RE SKIPPED', mood: 'playful' as const }
+          : action.includes('reversed')
+            ? { emoji: '🔄', label: 'TURN REVERSED', mood: 'wild' as const }
+            : action.includes('chose ')
+              ? { emoji: '🌈', label: 'COLOR CHANGE', mood: 'wild' as const }
+              : null;
+    setActionReaction(reaction ? { ...reaction, key: actionKey } : null);
+    if (reaction) {
+      reactionTimerRef.current = window.setTimeout(() => {
+        setActionReaction(null);
+        reactionTimerRef.current = null;
+      }, 1750);
     }
   }, [actionKey, state?.lastAction]);
   useEffect(() => {
     const action = state?.lastAction?.toLowerCase() ?? '';
     if (!soundPulse || !action || localStorage.getItem('uno-arena-sfx') === 'off') return;
     const tones = action.includes('called uno') ? [784, 988, 1318]
-      : action.includes('played +4') ? [330, 392]
-      : action.includes('played +2') ? [440, 523]
+      : action.includes('played +4') ? [392, 311, 233]
+      : action.includes('played +2') ? [523, 392]
       : action.includes('reversed') ? [698, 587]
       : action.includes('skipped') ? [622, 466]
       : action.includes('won!') ? [784, 988, 1174]
       : action.includes('drew') ? [392]
       : [523];
-    const audio = new AudioContext();
-    let remaining = tones.length;
+    let audio = sfxAudioRef.current;
+    if (!audio || audio.state === 'closed') {
+      audio = new window.AudioContext();
+      sfxAudioRef.current = audio;
+    }
+    if (audio.state === 'suspended') void audio.resume().catch(() => undefined);
+    const isDrawFour = action.includes('played +4');
+    const noteSpacing = isDrawFour ? 0.12 : 0.045;
+    const noteDuration = isDrawFour ? 0.29 : 0.15;
+    const peakVolume = isDrawFour ? 0.021 : 0.027;
     tones.forEach((frequency, index) => {
       const osc = audio.createOscillator();
       const gain = audio.createGain();
-      const startsAt = audio.currentTime + index * 0.045;
+      const startsAt = audio.currentTime + index * noteSpacing;
       osc.type = 'triangle';
-      osc.frequency.value = frequency;
+      osc.frequency.setValueAtTime(frequency, startsAt);
       gain.gain.setValueAtTime(0.001, startsAt);
-      gain.gain.exponentialRampToValueAtTime(0.027, startsAt + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.001, startsAt + 0.15);
+      gain.gain.exponentialRampToValueAtTime(peakVolume, startsAt + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.001, startsAt + noteDuration);
       osc.connect(gain);
       gain.connect(audio.destination);
       osc.start(startsAt);
-      osc.stop(startsAt + 0.16);
-      osc.onended = () => {
-        remaining -= 1;
-        if (remaining === 0) void audio.close();
-      };
+      osc.stop(startsAt + noteDuration + 0.01);
     });
   }, [soundPulse]);
+  useEffect(() => () => {
+    if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
+    const audio = sfxAudioRef.current;
+    if (audio && audio.state !== 'closed') void audio.close();
+  }, []);
   const reportMutationError = (error: unknown) => setRoomError(errorText(error));
   const joinRoom = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setRoomError('');
@@ -313,14 +355,14 @@ function GameRoom() {
     catch { setCopyLabel(`Code: ${roomCode}`); }
   };
 
-  if (!identity) return <main className="arena"><header className="topbar"><Logo /><button className="btn-quiet" onClick={() => setLocation('/')} data-testid="button-home"><DoorOpen size={15} /> Back home</button></header>
+  if (!identity) return <main className="arena" onPointerDownCapture={primeSfxAudio}><header className="topbar"><Logo /><button className="btn-quiet" onClick={() => setLocation('/')} data-testid="button-home"><DoorOpen size={15} /> Back home</button></header>
     <section className="lobby-wrap" style={{ maxWidth: 600 }}><div className="eyebrow">You have an invite</div><h1 className="lobby-title">Take a seat.</h1><p style={{ color: '#746b61', lineHeight: 1.6 }}>Join room <strong className="room-code">{roomCode}</strong> with your name. Your player identity will stay saved on this device.</p>
       <form className="lobby-card" onSubmit={joinRoom}><label className="field-label" htmlFor="rejoin-name">Your name</label><input id="rejoin-name" className="field" maxLength={20} value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="Name at the table" data-testid="input-rejoin-name" />{roomError && <div className="error-box" role="alert">{roomError}</div>}<button className="btn-primary wide" disabled={join.isPending} data-testid="button-join-room">{join.isPending ? 'Taking a seat…' : 'Join this room'} <ArrowRight size={16} /></button></form>
     </section></main>;
 
-  if (gameQuery.isLoading && !state) return <main className="game-shell"><header className="game-top"><Logo /><span className="connection">RECONNECTING TO {roomCode}</span></header><section className="lobby-wrap"><div className="skeleton" style={{ width: 150, height: 12 }} /><div className="skeleton" style={{ width: 350, maxWidth: '80%', height: 42, marginTop: 18 }} /><div className="lobby-grid" style={{ marginTop: 28 }}><div className="lobby-card"><div className="skeleton" style={{ width: '50%', marginBottom: 25 }} />{[1, 2, 3].map((n) => <div key={n} className="skeleton" style={{ height: 54, margin: '12px 0' }} />)}</div><div className="lobby-card"><div className="skeleton" style={{ height: 170 }} /></div></div></section></main>;
+  if (gameQuery.isLoading && !state) return <main className="game-shell" onPointerDownCapture={primeSfxAudio}><header className="game-top"><Logo /><span className="connection">RECONNECTING TO {roomCode}</span></header><section className="lobby-wrap"><div className="skeleton" style={{ width: 150, height: 12 }} /><div className="skeleton" style={{ width: 350, maxWidth: '80%', height: 42, marginTop: 18 }} /><div className="lobby-grid" style={{ marginTop: 28 }}><div className="lobby-card"><div className="skeleton" style={{ width: '50%', marginBottom: 25 }} />{[1, 2, 3].map((n) => <div key={n} className="skeleton" style={{ height: 54, margin: '12px 0' }} />)}</div><div className="lobby-card"><div className="skeleton" style={{ height: 170 }} /></div></div></section></main>;
 
-  if (gameQuery.isError && !state) return <main className="arena"><header className="topbar"><Logo /><button className="btn-quiet" onClick={() => setLocation('/')}><DoorOpen size={15} /> Home</button></header><section className="lobby-wrap" style={{ maxWidth: 650 }}><div className="lobby-card"><ShieldAlert size={27} color="#c64f37" /><h1 className="lobby-title" style={{ fontSize: 42 }}>Couldn't reconnect.</h1><p style={{ color: '#73695f', lineHeight: 1.6 }}>{errorText(gameQuery.error)} Your saved room may have closed, or this player identity is no longer available.</p><button className="btn-primary" onClick={() => { void gameQuery.refetch(); setRoomError(''); }} data-testid="button-retry">Try reconnecting <RotateCcw size={15} /></button> <button className="btn-quiet" onClick={() => setIdentity(null)} data-testid="button-join-another">Join as a new player</button></div></section></main>;
+  if (gameQuery.isError && !state) return <main className="arena" onPointerDownCapture={primeSfxAudio}><header className="topbar"><Logo /><button className="btn-quiet" onClick={() => setLocation('/')}><DoorOpen size={15} /> Home</button></header><section className="lobby-wrap" style={{ maxWidth: 650 }}><div className="lobby-card"><ShieldAlert size={27} color="#c64f37" /><h1 className="lobby-title" style={{ fontSize: 42 }}>Couldn't reconnect.</h1><p style={{ color: '#73695f', lineHeight: 1.6 }}>{errorText(gameQuery.error)} Your saved room may have closed, or this player identity is no longer available.</p><button className="btn-primary" onClick={() => { void gameQuery.refetch(); setRoomError(''); }} data-testid="button-retry">Try reconnecting <RotateCcw size={15} /></button> <button className="btn-quiet" onClick={() => setIdentity(null)} data-testid="button-join-another">Join as a new player</button></div></section></main>;
 
   if (!state) return null;
   const isLobby = state.status === 'lobby';
@@ -332,7 +374,7 @@ function GameRoom() {
   const you = state.players.find((player) => player.id === state.youPlayerId);
   const winner = state.players.find((player) => player.id === state.winnerId);
   const mutationPending = start.isPending || play.isPending || draw.isPending || pass.isPending;
-  return <main className="game-shell">
+  return <main className="game-shell" onPointerDownCapture={primeSfxAudio}>
     <header className="game-top"><Logo /><div className="room-code"><span>ROOM</span><strong style={{ color: '#253a37' }}>{roomCode}</strong><button className="tiny-control" onClick={copyCode} data-testid="button-copy-code">{copyLabel === 'Link copied' ? <Check size={14} /> : <Copy size={14} />}{copyLabel}</button></div><MusicControls /></header>
     {isLobby ? <section className="lobby-wrap">
       <div className="lobby-head"><div><div className="eyebrow">Waiting for the crew</div><h1 className="lobby-title">Room is warming up.</h1><p style={{ color: '#736a61', margin: '9px 0 0' }}>Share the invite. Start when at least two people are at the table.</p></div><button className="btn-secondary" onClick={copyCode} data-testid="button-share-room"><Send size={16} /> {copyLabel === 'Link copied' ? 'Invite copied' : 'Share invite'}</button></div>
@@ -340,8 +382,9 @@ function GameRoom() {
         <div className="lobby-card" style={{ background: '#244f49', color: '#fff4e3', position: 'relative', overflow: 'hidden' }}><div style={{ position: 'absolute', width: 200, height: 200, right: -70, bottom: -90, borderRadius: '50%', background: '#f1c95c', opacity: .15 }} /><div className="eyebrow" style={{ color: '#d7c28e' }}>Your room code</div><div style={{ font: '500 clamp(34px,5vw,54px) var(--app-font-mono)', letterSpacing: '.11em', margin: '18px 0' }}>{roomCode}</div><p style={{ color: '#d2dfd3', lineHeight: 1.6, fontSize: 14, maxWidth: 250 }}>Send the code or invite link to your friends. They'll appear here when they join.</p><button className="btn-primary" onClick={copyCode} data-testid="button-copy-invite"><Clipboard size={15} /> Copy room invite</button><div style={{ marginTop: 28, borderTop: '1px solid #ffffff2b', paddingTop: 18 }}><div className="eyebrow" style={{ color: '#d7c28e' }}>Your move</div><p style={{ margin: '8px 0', fontWeight: 600 }}>{state.canStart ? 'The table is ready.' : 'Waiting on one more player.'}</p>{state.players.find((p) => p.id === state.youPlayerId)?.isHost && <button className="btn-primary wide" style={{ marginTop: 10 }} disabled={!state.canStart || mutationPending} onClick={startGame} data-testid="button-start-game">{start.isPending ? 'Dealing the cards…' : <><Sparkles size={16} /> Start the game</>}</button>}</div></div>
       </div>{roomError && <div className="error-box" role="alert">{roomError}</div>}
     </section> : <><div className="game-body">
-       <section className="table-stage"><ThreeTable /><div className={`turn-banner ${isYourTurn ? 'yours' : ''}`} data-testid="status-turn">{isFinished ? 'Round complete' : isYourTurn ? 'Your turn' : `${state.players.find((p) => p.id === state.currentPlayerId)?.name || 'A player'} is playing`}</div>
-         <div className="playfield"><div className="table-center"><div className="pile"><div className="playing-card card-wild" style={{ transform: 'rotate(-8deg)', background: '#f1ddba', color: '#29594f', fontSize: 35, textShadow: 'none' }}><span className="card-corner" style={{ color: '#29594f' }}>PILE</span><span><ArrowDownToLine size={34} /></span></div><div className="pile-count">{state.drawPileCount} in deck</div></div><div className="pile">{state.topCard ? <CardFace key={state.topCard.id} card={state.topCard} /> : <div className="playing-card card-wild">?</div>}<div className="pile-count">Discard · {colorName(state.currentColor)}</div></div></div></div>
+        <section className="table-stage"><ThreeTable /><div className={`turn-banner ${isYourTurn ? 'yours' : ''}`} data-testid="status-turn">{isFinished ? 'Round complete' : isYourTurn ? 'Your turn' : `${state.players.find((p) => p.id === state.currentPlayerId)?.name || 'A player'} is playing`}</div>
+          {actionReaction && <div key={actionReaction.key} className={`action-reaction reaction-${actionReaction.mood}`} role="status" aria-live="polite" data-testid="status-action-reaction"><span className="reaction-emoji" aria-hidden="true">{actionReaction.emoji}</span><span className="reaction-copy">{actionReaction.label}</span></div>}
+          <div className="playfield"><div className="table-center"><div className="pile"><div className="playing-card card-wild" style={{ transform: 'perspective(900px) rotateX(8deg) rotateY(-8deg) rotateZ(-8deg)', background: '#f1ddba', color: '#29594f', fontSize: 35, textShadow: 'none' }}><span className="card-corner" style={{ color: '#29594f' }}>PILE</span><span className="card-symbol"><ArrowDownToLine size={34} /></span></div><div className="pile-count">{state.drawPileCount} in deck</div></div><div className="pile">{state.topCard ? <CardFace key={state.topCard.id} card={state.topCard} /> : <div className="playing-card card-wild">?</div>}<div className="pile-count">Discard · {colorName(state.currentColor)}</div></div></div></div>
         {isFinished && <div className="winner-panel" data-testid="status-winner"><div><div className="eyebrow" style={{ color: '#e4c969' }}>A fine finish</div><h2>{winner?.id === state.youPlayerId ? 'You got it.' : `${winner?.name || 'Someone'} wins.`}</h2><p style={{ color: '#e8dfd0' }}>{winner?.id === state.youPlayerId ? 'The table is yours. The rematch is calling.' : 'Nicely played. Who is calling the rematch?'}</p><button className="btn-primary" onClick={() => setLocation('/')} data-testid="button-new-game"><RotateCcw size={16} /> New table</button></div></div>}
       </section>
       <aside className="players-rail"><div className="rail-title"><strong>At the table</strong><span className="hand-pill">{state.players.length} players</span></div>{state.players.map((p, index) => <div key={p.id} className={`player-row ${p.id === state.currentPlayerId ? 'current' : ''}`} data-testid={`player-status-${p.id}`}><div className="avatar" style={{ background: avatarColor(index) }}>{p.name.slice(0, 1).toUpperCase()}</div><div className="player-meta"><div className="player-name">{p.name}{p.isYou ? ' · You' : ''}</div><div className="player-sub">{p.id === state.currentPlayerId ? 'AT THE WHEEL' : p.isHost ? 'HOST' : 'IN THE ROUND'}</div></div><span className="hand-pill">{p.handCount} <span className="sr-only">cards</span></span></div>)}<div style={{ marginTop: 'auto', borderTop: '1px solid #e1d7ca', paddingTop: 15 }}><div className="eyebrow">Table signals</div><div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 11, fontSize: 12 }}><span>Direction</span><strong style={{ display: 'flex', gap: 6, alignItems: 'center' }}><ArrowLeftRight size={14} /> {state.direction === 'clockwise' ? 'Clockwise' : 'Counterclockwise'}</strong></div><div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 12 }}><span>Color in play</span><strong><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 20, background: colorHex(state.currentColor) }} /> {colorName(state.currentColor)}</strong></div>{state.lastAction && <div style={{ color: '#85796d', marginTop: 12, fontSize: 11, lineHeight: 1.4 }} data-testid="text-last-action">{state.lastAction}</div>}</div></aside>
@@ -354,7 +397,7 @@ function GameRoom() {
       </footer>
     </>}
     {roomError && <div className="error-box" role="alert" style={{ position: 'fixed', right: 18, bottom: 18, zIndex: 8, maxWidth: 370 }} data-testid="status-action-error">{roomError}<button className="tiny-control" style={{ marginLeft: 10 }} onClick={() => setRoomError('')} data-testid="button-dismiss-error">Dismiss</button></div>}
-    {unoFlash && <div className="uno-announcement" role="status" aria-live="assertive" data-testid="status-uno-call"><span>UNO!</span><small>One card. Game on.</small></div>}
+    {unoFlash && <div className="uno-announcement" role="status" aria-live="assertive" data-testid="status-uno-call"><div className="uno-emoji" aria-hidden="true">🎉</div><span>UNO!</span><small>One card. Game on.</small></div>}
     {pendingCard && <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="uno-title"><div className="modal-card"><div className="eyebrow">One card left</div><h2 id="uno-title" style={{ fontSize: 34, letterSpacing: '-.06em', margin: '8px 0' }}>Call it. Then play it.</h2><p style={{ color: '#71685f', lineHeight: 1.55 }}>This play leaves you with one card. Declare UNO in the same move to make it official.</p><div style={{ display: 'flex', alignItems: 'center', gap: 15, margin: '20px 0' }}><CardFace card={pendingCard} /><strong>{pendingCard.label}</strong></div><div style={{ display: 'flex', gap: 9 }}><button className="btn-primary" disabled={play.isPending} onClick={() => pendingCard.kind === 'wild' || pendingCard.kind === 'wild4' ? (setColorCard(pendingCard), setPendingCard(null)) : playCard(pendingCard)} data-testid="button-declare-uno">{play.isPending ? 'Playing…' : <>UNO — play it <ArrowRight size={16} /></>}</button><button className="btn-quiet" onClick={() => setPendingCard(null)} data-testid="button-cancel-uno">Not yet</button></div></div></div>}
     {colorCard && <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="color-title"><div className="modal-card"><div className="eyebrow">A wild moment</div><h2 id="color-title" style={{ fontSize: 34, letterSpacing: '-.06em', margin: '8px 0' }}>Name the next color.</h2><p style={{ color: '#71685f' }}>Choose where the table goes next.</p><div className="color-options">{colorNames.map((color) => <button key={color} className={`color-choice card-${color}`} aria-label={`Choose ${color}`} onClick={() => playCard(colorCard!, color)} data-testid={`button-color-${color}`} />)}</div><button className="btn-quiet" onClick={() => setColorCard(null)} data-testid="button-cancel-color">Go back</button></div></div>}
   </main>;
