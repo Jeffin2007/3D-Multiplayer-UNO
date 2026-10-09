@@ -21,6 +21,8 @@ import {
   StartGameResponse,
 } from "@workspace/api-zod";
 import {
+  callOutUno,
+  callUno,
   createGame,
   drawCard,
   GameRuleError,
@@ -160,6 +162,22 @@ router.post("/games/:code/draw", (req, res): void => {
   }
 });
 
+router.post("/games/:code/uno", (req, res): void => {
+  const params = GetGameParams.safeParse(req.params);
+  const body = DrawCardBody.safeParse(req.body);
+  if (!params.success || !body.success) {
+    res.status(400).json({
+      error: !params.success ? params.error.message : body.error?.message ?? "Invalid request.",
+    });
+    return;
+  }
+  try {
+    res.json(GetGameResponse.parse(callUno(params.data.code, body.data.playerId)));
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
 router.post("/games/:code/pass", (req, res): void => {
   const params = PassTurnParams.safeParse(req.params);
   const body = PassTurnBody.safeParse(req.body);
@@ -172,6 +190,39 @@ router.post("/games/:code/pass", (req, res): void => {
   try {
     res.json(
       PassTurnResponse.parse(passTurn(params.data.code, body.data.playerId)),
+    );
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+router.post("/games/:code/callout", (req, res): void => {
+  const params = GetGameParams.safeParse(req.params);
+  const body = req.body as { playerId?: unknown; targetPlayerId?: unknown } | null;
+  if (
+    !params.success ||
+    !body ||
+    typeof body.playerId !== "string" ||
+    body.playerId.trim().length === 0 ||
+    typeof body.targetPlayerId !== "string" ||
+    body.targetPlayerId.trim().length === 0
+  ) {
+    res.status(400).json({
+      error: !params.success
+        ? params.error.message
+        : "Both playerId and targetPlayerId are required.",
+    });
+    return;
+  }
+  try {
+    res.json(
+      GetGameResponse.parse(
+        callOutUno(
+          params.data.code,
+          body.playerId,
+          body.targetPlayerId,
+        ),
+      ),
     );
   } catch (err) {
     sendError(req, res, err);

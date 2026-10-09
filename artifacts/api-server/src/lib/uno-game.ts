@@ -31,8 +31,8 @@ interface Room {
   winnerId: string | null;
   lastAction: string | null;
   lastActivity: number;
-  hasDrawn: boolean;
-  drawnCardId: string | null;
+  openingColorChooserId: string | null;
+  unoCalloutPlayerId: string | null;
 }
 
 export interface PublicGameState {
@@ -165,8 +165,8 @@ export function createGame(playerName: string): PublicGameState {
     winnerId: null,
     lastAction: `${player.name} opened the table.`,
     lastActivity: Date.now(),
-    hasDrawn: false,
-    drawnCardId: null,
+    openingColorChooserId: null,
+    unoCalloutPlayerId: null,
   };
   rooms.set(code, room);
   return getGameState(room, player.id);
@@ -197,30 +197,46 @@ export function startGame(code: string, playerId: string): PublicGameState {
 
   room.drawPile = buildDeck();
   room.discardPile = [];
+  room.players.forEach((player) => { player.hand = []; });
+  const startingIndex = randomInt(room.players.length);
   for (let card = 0; card < 7; card += 1) {
-    for (const player of room.players) {
+    for (let offset = 0; offset < room.players.length; offset += 1) {
+      const player = room.players[(startingIndex + offset) % room.players.length];
       const dealt = room.drawPile.pop();
       if (!dealt) throw new GameRuleError("The deck could not be dealt.", 500);
       player.hand.push(dealt);
     }
   }
 
-  const rejectedOpeningCards: Card[] = [];
-  let openingCard = room.drawPile.pop();
-  while (openingCard && openingCard.kind !== "number") {
-    rejectedOpeningCards.push(openingCard);
-    openingCard = room.drawPile.pop();
-  }
-  if (!openingCard) throw new GameRuleError("Could not find an opening number card.", 500);
-  room.drawPile = shuffle([...room.drawPile, ...rejectedOpeningCards]);
+  const openingCard = room.drawPile.pop();
+  if (!openingCard) throw new GameRuleError("Could not draw an opening card.", 500);
   room.discardPile.push(openingCard);
   room.currentColor = openingCard.color;
-  room.currentPlayerIndex = 0;
+  room.currentPlayerIndex = startingIndex;
   room.direction = 1;
   room.status = "playing";
-  room.hasDrawn = false;
-  room.drawnCardId = null;
-  room.lastAction = "The table is live. First turn is up.";
+  room.openingColorChooserId = null;
+  room.unoCalloutPlayerId = null;
+
+  const firstPlayer = room.players[startingIndex];
+  if (openingCard.kind === "wild" || openingCard.kind === "wild4") {
+    room.currentColor = null;
+    room.openingColorChooserId = firstPlayer.id;
+    room.lastAction = `${firstPlayer.name} starts. Choose a color for the opening ${openingCard.label}.`;
+  } else if (openingCard.kind === "skip") {
+    const skipped = room.players[startingIndex];
+    room.currentPlayerIndex = nextIndex(room, startingIndex);
+    room.lastAction = `Opening Skip: ${skipped.name} loses their first turn.`;
+  } else if (openingCard.kind === "reverse") {
+    room.direction = -1;
+    room.lastAction = `Opening Reverse: play is now counterclockwise. ${firstPlayer.name} starts.`;
+  } else if (openingCard.kind === "draw2") {
+    const drawn = drawMany(room, firstPlayer, 2);
+    room.currentPlayerIndex = nextIndex(room, startingIndex);
+    room.lastAction = `Opening +2: ${firstPlayer.name} drew ${drawn} cards and loses their first turn.`;
+  } else {
+    room.lastAction = `${firstPlayer.name} starts.`;
+  }
   return getGameState(room, playerId);
 }
 
@@ -257,11 +273,8 @@ function drawMany(room: Room, player: Player, count: number): number {
   return drawn;
 }
 
-function isPlayable(room: Room, card: Card, player: Player): boolean {
-  if (card.kind === "wild") return true;
-  if (card.kind === "wild4") {
-    return !player.hand.some((held) => held.id !== card.id && held.color === room.currentColor);
-  }
+function isPlayable(room: Room, card: Card): boolean {
+  if (card.kind === "wild" || card.kind === "wild4") return true;
   if (card.color === room.currentColor) return true;
   const top = room.discardPile.at(-1);
   if (!top || top.kind === "wild" || top.kind === "wild4") return false;
@@ -272,53 +285,84 @@ function isPlayable(room: Room, card: Card, player: Player): boolean {
 function requireActiveTurn(room: Room, playerId: string): Player {
   const player = findPlayer(room, playerId);
   if (room.status !== "playing") throw new GameRuleError("The game is not in progress.");
+  if (room.openingColorChooserId) {
+    throw new GameRuleError("Choose a color for the opening Wild card first.");
+  }
   if (currentPlayer(room).id !== playerId) {
     throw new GameRuleError("It is not your turn yet.", 403);
   }
   return player;
 }
 
-function clearDrawState(room: Room): void {
-  room.hasDrawn = false;
-  room.drawnCardId = null;
-}
-
 function finishTurn(room: Room): void {
   room.currentPlayerIndex = nextIndex(room, room.currentPlayerIndex);
-  clearDrawState(room);
 }
 
 export function drawCard(code: string, playerId: string): PublicGameState {
   const room = findRoom(code);
   const player = requireActiveTurn(room, playerId);
-  if (room.hasDrawn) throw new GameRuleError("You can draw only once in a turn.");
   const card = drawOne(room);
   if (!card) {
-    room.lastAction = "The draw pile is empty. Turn passes.";
-    finishTurn(room);
-    return getGameState(room, playerId);
+    throw new GameRuleError("There are no cards left to draw. Play a valid card instead.");
   }
   player.hand.push(card);
-  if (isPlayable(room, card, player)) {
-    room.hasDrawn = true;
-    room.drawnCardId = card.id;
-    room.lastAction = `${player.name} drew a playable card.`;
+  room.unoCalloutPlayerId = null;
+  room.lastAction = `${player.name} drew one card. Turn passes.`;
+  finishTurn(room);
+  return getGameState(room, playerId);
+}
+
+export function callUno(code: string, playerId: string): PublicGameState {
+  const room = findRoom(code);
+  const player = findPlayer(room, playerId);
+  if (room.status !== "playing") throw new GameRuleError("The game is not in progress.");
+  if (room.openingColorChooserId) {
+    throw new GameRuleError("Choose a color for the opening Wild card first.");
+  }
+  if (player.hand.length === 1) {
+    if (room.unoCalloutPlayerId === player.id) room.unoCalloutPlayerId = null;
+    room.lastAction = `${player.name} called UNO!`;
   } else {
-    room.lastAction = `${player.name} drew a card. Turn passes.`;
-    finishTurn(room);
+    const drawn = drawMany(room, player, 3);
+    if (room.unoCalloutPlayerId === player.id) room.unoCalloutPlayerId = null;
+    room.lastAction = `${player.name} called UNO incorrectly and drew ${drawn} cards.`;
+  }
+  return getGameState(room, playerId);
+}
+
+export function callOutUno(
+  code: string,
+  playerId: string,
+  targetPlayerId: string,
+): PublicGameState {
+  const room = findRoom(code);
+  const caller = findPlayer(room, playerId);
+  const target = findPlayer(room, targetPlayerId);
+  if (room.status !== "playing") throw new GameRuleError("The game is not in progress.");
+  if (room.openingColorChooserId) {
+    throw new GameRuleError("Choose a color for the opening Wild card first.");
+  }
+
+  if (
+    caller.id !== target.id &&
+    room.unoCalloutPlayerId === target.id &&
+    target.hand.length === 1
+  ) {
+    const drawn = drawMany(room, target, 3);
+    room.unoCalloutPlayerId = null;
+    room.lastAction = `${caller.name} caught ${target.name} without UNO. ${target.name} drew ${drawn} cards.`;
+  } else {
+    const drawn = drawMany(room, caller, 3);
+    if (room.unoCalloutPlayerId === caller.id) room.unoCalloutPlayerId = null;
+    room.lastAction = `${caller.name} called out ${target.name} incorrectly and drew ${drawn} cards.`;
   }
   return getGameState(room, playerId);
 }
 
 export function passTurn(code: string, playerId: string): PublicGameState {
-  const room = findRoom(code);
-  const player = requireActiveTurn(room, playerId);
-  if (!room.hasDrawn || !room.drawnCardId) {
-    throw new GameRuleError("Draw a playable card before choosing to pass.");
-  }
-  room.lastAction = `${player.name} chose not to play the drawn card.`;
-  finishTurn(room);
-  return getGameState(room, playerId);
+  void code;
+  void playerId;
+  throw new GameRuleError("Passing is not allowed. Play one valid card or draw one card.");
 }
 
 export function playCard(
@@ -329,34 +373,50 @@ export function playCard(
   declareUno: boolean,
 ): PublicGameState {
   const room = findRoom(code);
+  if (room.openingColorChooserId) {
+    const openingPlayer = findPlayer(room, playerId);
+    const openingCard = room.discardPile.at(-1);
+    if (room.openingColorChooserId !== playerId) {
+      throw new GameRuleError("Only the first player can choose the opening color.", 403);
+    }
+    if (!openingCard || openingCard.id !== cardId || (openingCard.kind !== "wild" && openingCard.kind !== "wild4")) {
+      throw new GameRuleError("Choose a color for the opening Wild card.");
+    }
+    if (!chosenColor || !colors.includes(chosenColor)) {
+      throw new GameRuleError("Choose a color for your Wild card.");
+    }
+
+    room.currentColor = chosenColor;
+    room.openingColorChooserId = null;
+    const colorLabel = chosenColor[0].toUpperCase() + chosenColor.slice(1);
+    if (openingCard.kind === "wild4") {
+      const drawn = drawMany(room, openingPlayer, 4);
+      room.currentPlayerIndex = nextIndex(room, room.currentPlayerIndex);
+      room.lastAction = `${openingPlayer.name} chose ${colorLabel} for the opening +4, drew ${drawn} cards, and lost their first turn.`;
+    } else {
+      room.lastAction = `${openingPlayer.name} chose ${colorLabel} for the opening Wild. Their turn begins.`;
+    }
+    return getGameState(room, playerId);
+  }
+
   const player = requireActiveTurn(room, playerId);
   const cardIndex = player.hand.findIndex((card) => card.id === cardId);
   if (cardIndex < 0) throw new GameRuleError("That card is not in your hand.");
   const card = player.hand[cardIndex];
 
-  if (room.hasDrawn && card.id !== room.drawnCardId) {
-    throw new GameRuleError("After drawing, you may play only the card just drawn.");
-  }
-  if (!isPlayable(room, card, player)) {
-    throw new GameRuleError(
-      card.kind === "wild4"
-        ? "Wild Draw Four is only legal when you have no card matching the current color."
-        : "That card does not match the current color or top card.",
-    );
+  if (!isPlayable(room, card)) {
+    throw new GameRuleError("That card does not match the current color or top card.");
   }
   if ((card.kind === "wild" || card.kind === "wild4") && !chosenColor) {
     throw new GameRuleError("Choose a color for your Wild card.");
   }
 
   const cardsAfterPlay = player.hand.length - 1;
-  if (cardsAfterPlay === 1 && !declareUno) {
-    throw new GameRuleError("Call UNO as part of the play that leaves you with one card.");
-  }
 
+  room.unoCalloutPlayerId = null;
   player.hand.splice(cardIndex, 1);
   room.discardPile.push(card);
   room.currentColor = card.kind === "wild" || card.kind === "wild4" ? chosenColor! : card.color;
-  clearDrawState(room);
 
   if (player.hand.length === 0) {
     room.status = "finished";
@@ -368,7 +428,18 @@ export function playCard(
   const colorLabel = room.currentColor
     ? room.currentColor[0].toUpperCase() + room.currentColor.slice(1)
     : "";
-  const unoText = cardsAfterPlay === 1 ? " and called UNO" : "";
+  let unoText = "";
+  if (cardsAfterPlay === 1) {
+    if (declareUno) {
+      unoText = " and called UNO";
+    } else {
+      room.unoCalloutPlayerId = player.id;
+      unoText = " and did not call UNO";
+    }
+  } else if (declareUno) {
+    const drawn = drawMany(room, player, 3);
+    unoText = ` and incorrectly called UNO, drawing ${drawn} cards`;
+  }
   let actionText = `${player.name} played ${card.label}${unoText}.`;
 
   if (card.kind === "skip") {
@@ -377,13 +448,8 @@ export function playCard(
     actionText = `${player.name} skipped ${skipped.name}${unoText}.`;
   } else if (card.kind === "reverse") {
     room.direction = room.direction === 1 ? -1 : 1;
-    if (room.players.length === 2) {
-      room.currentPlayerIndex = room.currentPlayerIndex;
-      actionText = `${player.name} reversed direction — and gets another turn${unoText}.`;
-    } else {
-      room.currentPlayerIndex = nextIndex(room, room.currentPlayerIndex);
-      actionText = `${player.name} reversed direction${unoText}.`;
-    }
+    finishTurn(room);
+    actionText = `${player.name} reversed direction${unoText}.`;
   } else if (card.kind === "draw2" || card.kind === "wild4") {
     const count = card.kind === "draw2" ? 2 : 4;
     const targetIndex = nextIndex(room, room.currentPlayerIndex);
@@ -427,8 +493,8 @@ function getGameState(room: Room, playerId: string): PublicGameState {
     currentPlayerId: active?.id ?? null,
     direction: room.direction === 1 ? "clockwise" : "counterclockwise",
     drawPileCount: room.drawPile.length,
-    hasDrawn: active?.id === playerId && room.hasDrawn,
-    drawnCardId: active?.id === playerId ? room.drawnCardId : null,
+    hasDrawn: false,
+    drawnCardId: null,
     winnerId: room.winnerId,
     lastAction: room.lastAction,
     canStart:

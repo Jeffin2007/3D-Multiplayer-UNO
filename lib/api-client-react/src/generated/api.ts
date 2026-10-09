@@ -20,6 +20,7 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CallOutUnoInput,
   CreateGameInput,
   GameState,
   HealthStatus,
@@ -579,7 +580,7 @@ export const getDrawCardUrl = (code: string,) => {
 }
 
 /**
- * @summary Draw one card
+ * @summary Draw one card and end the turn
  */
 export const drawCard = async (code: string,
     playerAction: PlayerAction, options?: Parameters<typeof customFetch>[1]): Promise<GameState> => {
@@ -646,7 +647,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type DrawCardMutationVariables = {code: string;data: BodyType<PlayerAction>}
 
     /**
- * @summary Draw one card
+ * @summary Draw one card and end the turn
  */
 export const useDrawCard = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof drawCard>>, TError,DrawCardMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -659,18 +660,19 @@ export const useDrawCard = <TError = ErrorType<void>,
       return useMutation(getDrawCardMutationOptions(options));
     }
 
-export const getPassTurnUrl = (code: string,) => {
+export const getCallUnoUrl = (code: string,) => {
 
 
 
 
-  return `/api/games/${code}/pass`
+  return `/api/games/${code}/uno`
 }
 
 /**
- * @summary End a turn after choosing not to play a playable drawn card
+ * A correct call does not consume a turn; an incorrect call draws three cards.
+ * @summary Call UNO
  */
-export const passTurn = async (code: string,
+export const callUno = async (code: string,
     playerAction: PlayerAction, options?: Parameters<typeof customFetch>[1]): Promise<GameState> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
@@ -687,7 +689,98 @@ export const passTurn = async (code: string,
     }
     return headers;
   };
-return customFetch<GameState>(getPassTurnUrl(code),
+return customFetch<GameState>(getCallUnoUrl(code),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(playerAction)
+  }
+);}
+
+
+
+
+
+export const getCallUnoMutationKey = () => ['callUno'] as const;
+
+export const getCallUnoMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof callUno>>, TError,CallUnoMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof callUno>>, TError,CallUnoMutationVariables, TContext> => {
+
+const mutationKey = getCallUnoMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof callUno>>, CallUnoMutationVariables> = (props) => {
+          const {code,data} = props ?? {};
+
+          return  callUno(code,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CallUnoMutationResult = NonNullable<Awaited<ReturnType<typeof callUno>>>
+    export type CallUnoMutationBody = BodyType<PlayerAction>
+    export type CallUnoMutationError = ErrorType<void>
+    export type CallUnoMutationVariables = {code: string;data: BodyType<PlayerAction>}
+
+    /**
+ * @summary Call UNO
+ */
+export const useCallUno = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof callUno>>, TError,CallUnoMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof callUno>>,
+        TError,
+        CallUnoMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCallUnoMutationOptions(options));
+    }
+
+export const getPassTurnUrl = (code: string,) => {
+
+
+
+
+  return `/api/games/${code}/pass`
+}
+
+/**
+ * Retained for older clients; turns must be resolved by playing one card or drawing one card.
+ * @deprecated
+ * @summary Reject passing under the Basic+ rules
+ */
+export const passTurn = async (code: string,
+    playerAction: PlayerAction, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<unknown>(getPassTurnUrl(code),
   {
     ...options,
     method: 'POST',
@@ -735,7 +828,8 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type PassTurnMutationVariables = {code: string;data: BodyType<PlayerAction>}
 
     /**
- * @summary End a turn after choosing not to play a playable drawn card
+ * @deprecated
+ * @summary Reject passing under the Basic+ rules
  */
 export const usePassTurn = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof passTurn>>, TError,PassTurnMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -746,5 +840,95 @@ export const usePassTurn = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getPassTurnMutationOptions(options));
+    }
+
+export const getCallOutUnoUrl = (code: string,) => {
+
+
+
+
+  return `/api/games/${code}/callout`
+}
+
+/**
+ * A correct call makes the target draw three cards; an incorrect call makes the caller draw three.
+ * @summary Call out an uncalled UNO
+ */
+export const callOutUno = async (code: string,
+    callOutUnoInput: CallOutUnoInput, options?: Parameters<typeof customFetch>[1]): Promise<GameState> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<GameState>(getCallOutUnoUrl(code),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(callOutUnoInput)
+  }
+);}
+
+
+
+
+
+export const getCallOutUnoMutationKey = () => ['callOutUno'] as const;
+
+export const getCallOutUnoMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof callOutUno>>, TError,CallOutUnoMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof callOutUno>>, TError,CallOutUnoMutationVariables, TContext> => {
+
+const mutationKey = getCallOutUnoMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof callOutUno>>, CallOutUnoMutationVariables> = (props) => {
+          const {code,data} = props ?? {};
+
+          return  callOutUno(code,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CallOutUnoMutationResult = NonNullable<Awaited<ReturnType<typeof callOutUno>>>
+    export type CallOutUnoMutationBody = BodyType<CallOutUnoInput>
+    export type CallOutUnoMutationError = ErrorType<void>
+    export type CallOutUnoMutationVariables = {code: string;data: BodyType<CallOutUnoInput>}
+
+    /**
+ * @summary Call out an uncalled UNO
+ */
+export const useCallOutUno = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof callOutUno>>, TError,CallOutUnoMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof callOutUno>>,
+        TError,
+        CallOutUnoMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCallOutUnoMutationOptions(options));
     }
 

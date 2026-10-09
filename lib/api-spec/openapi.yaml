@@ -152,14 +152,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/GameState"
         "400":
-          description: Card is not a legal play or an UNO call is required
+          description: Card is not a legal play or a Wild card is missing a color
         "403":
           description: It is not this player's turn
   /games/{code}/draw:
     post:
       operationId: drawCard
       tags: [games]
-      summary: Draw one card
+      summary: Draw one card and end the turn
       parameters:
         - name: code
           in: path
@@ -174,20 +174,49 @@ paths:
               $ref: "#/components/schemas/PlayerAction"
       responses:
         "200":
-          description: Card drawn or the turn ended because the drawn card was not playable
+          description: One card drawn and the turn ended
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GameState"
         "400":
-          description: A card was already drawn this turn
+          description: The game is not accepting a draw
         "403":
           description: It is not this player's turn
+  /games/{code}/uno:
+    post:
+      operationId: callUno
+      tags: [games]
+      summary: Call UNO
+      description: A correct call does not consume a turn; an incorrect call draws three cards.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlayerAction"
+      responses:
+        "200":
+          description: UNO call resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: UNO cannot be called during opening color selection
   /games/{code}/pass:
     post:
       operationId: passTurn
+      deprecated: true
       tags: [games]
-      summary: End a turn after choosing not to play a playable drawn card
+      summary: Reject passing under the Basic+ rules
+      description: Retained for older clients; turns must be resolved by playing one card or drawing one card.
       parameters:
         - name: code
           in: path
@@ -201,14 +230,35 @@ paths:
             schema:
               $ref: "#/components/schemas/PlayerAction"
       responses:
+        "400":
+          description: Passing is not permitted
+  /games/{code}/callout:
+    post:
+      operationId: callOutUno
+      tags: [games]
+      summary: Call out an uncalled UNO
+      description: A correct call makes the target draw three cards; an incorrect call makes the caller draw three.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallOutUnoInput"
+      responses:
         "200":
-          description: Turn ended
+          description: The accusation resolved
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GameState"
         "400":
-          description: No drawn card is awaiting a decision
+          description: The accusation cannot be made during opening color selection
 components:
   schemas:
     HealthStatus:
@@ -312,6 +362,12 @@ components:
       properties:
         playerId: { type: string, minLength: 1 }
       required: [playerId]
+    CallOutUnoInput:
+      type: object
+      properties:
+        playerId: { type: string, minLength: 1 }
+        targetPlayerId: { type: string, minLength: 1 }
+      required: [playerId, targetPlayerId]
     PlayCardInput:
       type: object
       properties:

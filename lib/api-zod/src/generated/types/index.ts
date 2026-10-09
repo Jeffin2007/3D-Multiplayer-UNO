@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './callOutUnoInput';
 export * from './cardKind';
 export * from './createGameInput';
 export * from './gameCard';

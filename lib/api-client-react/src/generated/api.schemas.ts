@@ -123,6 +123,13 @@ export interface PlayerAction {
   playerId: string;
 }
 
+export interface CallOutUnoInput {
+  /** @minLength 1 */
+  playerId: string;
+  /** @minLength 1 */
+  targetPlayerId: string;
+}
+
 export interface PlayCardInput {
   /** @minLength 1 */
   playerId: string;

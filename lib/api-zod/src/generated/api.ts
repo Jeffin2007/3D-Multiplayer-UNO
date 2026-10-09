@@ -274,7 +274,7 @@ export const PlayCardResponse = zod.object({
 
 
 /**
- * @summary Draw one card
+ * @summary Draw one card and end the turn
  */
 export const DrawCardParams = zod.object({
   "code": zod.coerce.string()
@@ -326,7 +326,62 @@ export const DrawCardResponse = zod.object({
 
 
 /**
- * @summary End a turn after choosing not to play a playable drawn card
+ * A correct call does not consume a turn; an incorrect call draws three cards.
+ * @summary Call UNO
+ */
+export const CallUnoParams = zod.object({
+  "code": zod.coerce.string()
+})
+
+
+
+
+export const CallUnoBody = zod.object({
+  "playerId": zod.string().min(1)
+})
+
+export const CallUnoResponse = zod.object({
+  "code": zod.string(),
+  "status": zod.enum(['lobby', 'playing', 'finished']),
+  "hostPlayerId": zod.string(),
+  "youPlayerId": zod.string(),
+  "players": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "handCount": zod.number().int(),
+  "isHost": zod.boolean(),
+  "isYou": zod.boolean()
+})),
+  "yourHand": zod.array(zod.object({
+  "id": zod.string(),
+  "color": zod.union([zod.literal('red'),zod.literal('yellow'),zod.literal('green'),zod.literal('blue'),zod.literal(null)]).nullable(),
+  "kind": zod.enum(['number', 'skip', 'reverse', 'draw2', 'wild', 'wild4']),
+  "value": zod.number().int().nullable(),
+  "label": zod.string()
+})),
+  "topCard": zod.union([zod.object({
+  "id": zod.string(),
+  "color": zod.union([zod.literal('red'),zod.literal('yellow'),zod.literal('green'),zod.literal('blue'),zod.literal(null)]).nullable(),
+  "kind": zod.enum(['number', 'skip', 'reverse', 'draw2', 'wild', 'wild4']),
+  "value": zod.number().int().nullable(),
+  "label": zod.string()
+}),zod.null()]),
+  "currentColor": zod.union([zod.enum(['red', 'yellow', 'green', 'blue']),zod.null()]),
+  "currentPlayerId": zod.string().nullable(),
+  "direction": zod.enum(['clockwise', 'counterclockwise']),
+  "drawPileCount": zod.number().int(),
+  "hasDrawn": zod.boolean(),
+  "drawnCardId": zod.string().nullable(),
+  "winnerId": zod.string().nullable(),
+  "lastAction": zod.string().nullable(),
+  "canStart": zod.boolean()
+})
+
+
+/**
+ * Retained for older clients; turns must be resolved by playing one card or drawing one card.
+ * @deprecated
+ * @summary Reject passing under the Basic+ rules
  */
 export const PassTurnParams = zod.object({
   "code": zod.coerce.string()
@@ -339,7 +394,27 @@ export const PassTurnBody = zod.object({
   "playerId": zod.string().min(1)
 })
 
-export const PassTurnResponse = zod.object({
+export const PassTurnResponse = zod.void()
+
+
+/**
+ * A correct call makes the target draw three cards; an incorrect call makes the caller draw three.
+ * @summary Call out an uncalled UNO
+ */
+export const CallOutUnoParams = zod.object({
+  "code": zod.coerce.string()
+})
+
+
+
+
+
+export const CallOutUnoBody = zod.object({
+  "playerId": zod.string().min(1),
+  "targetPlayerId": zod.string().min(1)
+})
+
+export const CallOutUnoResponse = zod.object({
   "code": zod.string(),
   "status": zod.enum(['lobby', 'playing', 'finished']),
   "hostPlayerId": zod.string(),

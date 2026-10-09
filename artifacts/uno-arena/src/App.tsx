@@ -9,7 +9,7 @@ import { ArrowDownToLine, ArrowLeftRight, ArrowRight, AudioLines, Check, Clipboa
 import * as THREE from 'three';
 import {
   getGetGameQueryKey, useCreateGame, useDrawCard, useGetGame, useJoinGame,
-  usePassTurn, usePlayCard, useStartGame,
+  useCallOutUno, useCallUno, usePlayCard, useStartGame,
 } from '@workspace/api-client-react';
 import type { GameCard, GameState, UnoColor } from '@workspace/api-client-react';
 
@@ -217,6 +217,7 @@ function GameRoom() {
   const [copyLabel, setCopyLabel] = useState('Copy code');
   const [pendingCard, setPendingCard] = useState<GameCard | null>(null);
   const [colorCard, setColorCard] = useState<GameCard | null>(null);
+  const [declareUnoWithPendingCard, setDeclareUnoWithPendingCard] = useState(false);
   const [soundPulse, setSoundPulse] = useState(0);
   const [unoFlash, setUnoFlash] = useState(false);
   const [actionReaction, setActionReaction] = useState<ActionReaction | null>(null);
@@ -232,8 +233,14 @@ function GameRoom() {
   const start = useStartGame();
   const play = usePlayCard();
   const draw = useDrawCard();
-  const pass = usePassTurn();
+  const callUnoAction = useCallUno();
+  const callOutUnoAction = useCallOutUno();
   const state = gameQuery.data as GameState | undefined;
+  const openingColorPending = Boolean(
+    state?.status === 'playing' &&
+    state.currentColor === null &&
+    (state.topCard?.kind === 'wild' || state.topCard?.kind === 'wild4'),
+  );
   const actionKey = state
     ? `${state.code}|${state.lastAction ?? ''}|${state.topCard?.id ?? ''}|${state.currentPlayerId ?? ''}|${state.drawPileCount}|${state.players.map((player) => player.handCount).join(',')}`
     : null;
@@ -253,7 +260,18 @@ function GameRoom() {
     setIdentity({ code: next.code, playerId: next.youPlayerId });
     setRoomError('');
     setPendingCard(null); setColorCard(null);
+    setDeclareUnoWithPendingCard(false);
   }, [queryClient]);
+  useEffect(() => {
+    if (
+      openingColorPending &&
+      state?.topCard &&
+      state.currentPlayerId === state.youPlayerId
+    ) {
+      setDeclareUnoWithPendingCard(false);
+      setColorCard(state.topCard);
+    }
+  }, [openingColorPending, state?.currentPlayerId, state?.topCard?.id, state?.youPlayerId]);
   useEffect(() => { if (state) saveIdentity(state); }, [state]);
   useEffect(() => {
     if (!state || !actionKey) return;
@@ -262,12 +280,22 @@ function GameRoom() {
     if (previous === null || previous === actionKey) return;
     setSoundPulse((n) => n + 1);
     const action = state.lastAction?.toLowerCase() ?? '';
-    if (action.includes('called uno')) {
+    const falseUnoCall = action.includes('called uno incorrectly') || action.includes('incorrectly called uno');
+    const falseCallout = action.includes('called out') && action.includes('incorrectly');
+    if (action.includes('called uno') && !falseUnoCall) {
       setUnoFlash(true);
       window.setTimeout(() => setUnoFlash(false), 1900);
     }
     if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
-    const reaction = action.includes('played +4')
+    const reaction = falseUnoCall
+      ? { emoji: '😅', label: 'FALSE UNO. DRAW 3.', mood: 'tense' as const }
+      : falseCallout
+        ? { emoji: '😵', label: 'BAD CALL. DRAW 3.', mood: 'tense' as const }
+      : action.includes('called uno')
+        ? { emoji: '🎉', label: 'UNO!', mood: 'playful' as const }
+        : action.includes('caught ')
+          ? { emoji: '👀', label: 'UNO CALLED OUT', mood: 'tense' as const }
+          : action.includes('played +4')
       ? { emoji: '😭', label: 'FOUR CARDS. OOF.', mood: 'sad' as const }
       : action.includes('played +2')
         ? { emoji: '😬', label: 'TWO MORE CARDS', mood: 'tense' as const }
@@ -289,7 +317,9 @@ function GameRoom() {
   useEffect(() => {
     const action = state?.lastAction?.toLowerCase() ?? '';
     if (!soundPulse || !action || localStorage.getItem('uno-arena-sfx') === 'off') return;
-    const tones = action.includes('called uno') ? [784, 988, 1318]
+    const falsePenaltyCall = action.includes('incorrectly') || action.includes('incorrect');
+    const tones = falsePenaltyCall ? [233, 196, 155]
+      : action.includes('called uno') ? [784, 988, 1318]
       : action.includes('played +4') ? [392, 311, 233]
       : action.includes('played +2') ? [523, 392]
       : action.includes('reversed') ? [698, 587]
@@ -334,9 +364,8 @@ function GameRoom() {
     join.mutate({ code: roomCode, data: { playerName: joinName.trim() } }, { onSuccess: (next) => updateFromAction(next), onError: reportMutationError });
   };
   const startGame = () => state && start.mutate({ code: roomCode, data: { playerId: state.youPlayerId } }, { onSuccess: updateFromAction, onError: reportMutationError });
-  const playCard = (card: GameCard, chosenColor?: UnoColor) => {
+  const playCard = (card: GameCard, chosenColor?: UnoColor, declareUno = false) => {
     if (!state) return;
-    const declareUno = state.yourHand.length === 2;
     play.mutate(
       { code: roomCode, data: { playerId: state.youPlayerId, cardId: card.id, chosenColor, declareUno } },
       { onSuccess: updateFromAction, onError: reportMutationError },
@@ -344,12 +373,18 @@ function GameRoom() {
   };
   const handleCard = (card: GameCard) => {
     if (!state || state.currentPlayerId !== state.youPlayerId || play.isPending) return;
+    if (openingColorPending) return;
     if (!isPlayable(card, state)) return;
     if (state.yourHand.length === 2) { setPendingCard(card); return; }
+    setDeclareUnoWithPendingCard(false);
     if (card.kind === 'wild' || card.kind === 'wild4') setColorCard(card); else playCard(card);
   };
   const drawOne = () => state && draw.mutate({ code: roomCode, data: { playerId: state.youPlayerId } }, { onSuccess: updateFromAction, onError: reportMutationError });
-  const passTurn = () => state && pass.mutate({ code: roomCode, data: { playerId: state.youPlayerId } }, { onSuccess: updateFromAction, onError: reportMutationError });
+  const callUno = () => state && callUnoAction.mutate({ code: roomCode, data: { playerId: state.youPlayerId } }, { onSuccess: updateFromAction, onError: reportMutationError });
+  const callOutPlayer = (targetPlayerId: string) => state && callOutUnoAction.mutate(
+    { code: roomCode, data: { playerId: state.youPlayerId, targetPlayerId } },
+    { onSuccess: updateFromAction, onError: reportMutationError },
+  );
   const copyCode = async () => {
     try { await navigator.clipboard.writeText(`${window.location.origin}/game/${roomCode}`); setCopyLabel('Link copied'); window.setTimeout(() => setCopyLabel('Copy code'), 1600); }
     catch { setCopyLabel(`Code: ${roomCode}`); }
@@ -368,12 +403,15 @@ function GameRoom() {
   const isLobby = state.status === 'lobby';
   const isFinished = state.status === 'finished';
   const isYourTurn = state.currentPlayerId === state.youPlayerId;
-  const canDraw = !isLobby && !isFinished && isYourTurn && !state.hasDrawn;
-  const drawnCard = state.drawnCardId ? state.yourHand.find((card) => card.id === state.drawnCardId) : undefined;
-  const canPass = !isLobby && !isFinished && isYourTurn && state.hasDrawn && Boolean(drawnCard && isPlayable(drawnCard, state));
+  const canDraw = !isLobby && !isFinished && isYourTurn;
   const you = state.players.find((player) => player.id === state.youPlayerId);
   const winner = state.players.find((player) => player.id === state.winnerId);
-  const mutationPending = start.isPending || play.isPending || draw.isPending || pass.isPending;
+  const mutationPending =
+    start.isPending ||
+    play.isPending ||
+    draw.isPending ||
+    callUnoAction.isPending ||
+    callOutUnoAction.isPending;
   return <main className="game-shell" onPointerDownCapture={primeSfxAudio}>
     <header className="game-top"><Logo /><div className="room-code"><span>ROOM</span><strong style={{ color: '#253a37' }}>{roomCode}</strong><button className="tiny-control" onClick={copyCode} data-testid="button-copy-code">{copyLabel === 'Link copied' ? <Check size={14} /> : <Copy size={14} />}{copyLabel}</button></div><MusicControls /></header>
     {isLobby ? <section className="lobby-wrap">
@@ -387,31 +425,27 @@ function GameRoom() {
           <div className="playfield"><div className="table-center"><div className="pile"><div className="playing-card card-wild" style={{ transform: 'perspective(900px) rotateX(8deg) rotateY(-8deg) rotateZ(-8deg)', background: '#f1ddba', color: '#29594f', fontSize: 35, textShadow: 'none' }}><span className="card-corner" style={{ color: '#29594f' }}>PILE</span><span className="card-symbol"><ArrowDownToLine size={34} /></span></div><div className="pile-count">{state.drawPileCount} in deck</div></div><div className="pile">{state.topCard ? <CardFace key={state.topCard.id} card={state.topCard} /> : <div className="playing-card card-wild">?</div>}<div className="pile-count">Discard · {colorName(state.currentColor)}</div></div></div></div>
         {isFinished && <div className="winner-panel" data-testid="status-winner"><div><div className="eyebrow" style={{ color: '#e4c969' }}>A fine finish</div><h2>{winner?.id === state.youPlayerId ? 'You got it.' : `${winner?.name || 'Someone'} wins.`}</h2><p style={{ color: '#e8dfd0' }}>{winner?.id === state.youPlayerId ? 'The table is yours. The rematch is calling.' : 'Nicely played. Who is calling the rematch?'}</p><button className="btn-primary" onClick={() => setLocation('/')} data-testid="button-new-game"><RotateCcw size={16} /> New table</button></div></div>}
       </section>
-      <aside className="players-rail"><div className="rail-title"><strong>At the table</strong><span className="hand-pill">{state.players.length} players</span></div>{state.players.map((p, index) => <div key={p.id} className={`player-row ${p.id === state.currentPlayerId ? 'current' : ''}`} data-testid={`player-status-${p.id}`}><div className="avatar" style={{ background: avatarColor(index) }}>{p.name.slice(0, 1).toUpperCase()}</div><div className="player-meta"><div className="player-name">{p.name}{p.isYou ? ' · You' : ''}</div><div className="player-sub">{p.id === state.currentPlayerId ? 'AT THE WHEEL' : p.isHost ? 'HOST' : 'IN THE ROUND'}</div></div><span className="hand-pill">{p.handCount} <span className="sr-only">cards</span></span></div>)}<div style={{ marginTop: 'auto', borderTop: '1px solid #e1d7ca', paddingTop: 15 }}><div className="eyebrow">Table signals</div><div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 11, fontSize: 12 }}><span>Direction</span><strong style={{ display: 'flex', gap: 6, alignItems: 'center' }}><ArrowLeftRight size={14} /> {state.direction === 'clockwise' ? 'Clockwise' : 'Counterclockwise'}</strong></div><div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 12 }}><span>Color in play</span><strong><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 20, background: colorHex(state.currentColor) }} /> {colorName(state.currentColor)}</strong></div>{state.lastAction && <div style={{ color: '#85796d', marginTop: 12, fontSize: 11, lineHeight: 1.4 }} data-testid="text-last-action">{state.lastAction}</div>}</div></aside>
+      <aside className="players-rail"><div className="rail-title"><strong>At the table</strong><span className="hand-pill">{state.players.length} players</span></div>{state.players.map((p, index) => <div key={p.id} className={`player-row ${p.id === state.currentPlayerId ? 'current' : ''}`} data-testid={`player-status-${p.id}`}><div className="avatar" style={{ background: avatarColor(index) }}>{p.name.slice(0, 1).toUpperCase()}</div><div className="player-meta"><div className="player-name">{p.name}{p.isYou ? ' · You' : ''}</div><div className="player-sub">{p.id === state.currentPlayerId ? 'AT THE WHEEL' : p.isHost ? 'HOST' : 'IN THE ROUND'}</div></div><span className="hand-pill">{p.handCount} <span className="sr-only">cards</span></span>{!p.isYou && <button className="tiny-control" style={{ marginLeft: 6, padding: '4px 7px', fontSize: 10 }} disabled={mutationPending} title={`Call out ${p.name} for not saying UNO`} onClick={() => callOutPlayer(p.id)} data-testid={`button-callout-${p.id}`}>Call out</button>}</div>)}<div style={{ marginTop: 'auto', borderTop: '1px solid #e1d7ca', paddingTop: 15 }}><div className="eyebrow">Table signals</div><div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 11, fontSize: 12 }}><span>Direction</span><strong style={{ display: 'flex', gap: 6, alignItems: 'center' }}><ArrowLeftRight size={14} /> {state.direction === 'clockwise' ? 'Clockwise' : 'Counterclockwise'}</strong></div><div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 12 }}><span>Color in play</span><strong><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 20, background: colorHex(state.currentColor) }} /> {colorName(state.currentColor)}</strong></div>{state.lastAction && <div style={{ color: '#85796d', marginTop: 12, fontSize: 11, lineHeight: 1.4 }} data-testid="text-last-action">{state.lastAction}</div>}</div></aside>
     </div>
-        <footer className="game-footer"><div className="footer-tools"><div><div className="action-status" data-testid="status-action">{isFinished ? `Round won by ${winner?.name || 'a player'}` : isYourTurn ? (state.hasDrawn ? 'One card drawn.' : 'Your play.') : `${state.players.find((p) => p.id === state.currentPlayerId)?.name || 'Opponent'} has the turn.`}</div><div className="action-hint">{isYourTurn ? state.hasDrawn ? 'Play the card you just drew if it fits, or pass.' : state.drawPileCount === 0 ? 'The draw pile is empty. End your turn.' : 'Play a matching card or draw one.' : 'Your cards are ready when the turn comes around.'}</div></div><div className="sidebar-actions">{state.hasDrawn && isYourTurn && <button className="btn-quiet" disabled={!canPass || mutationPending} onClick={passTurn} data-testid="button-pass-turn">{pass.isPending ? 'Passing…' : 'Pass turn'}</button>}<button className="btn-secondary" disabled={!canDraw || mutationPending} onClick={drawOne} data-testid="button-draw-card">{draw.isPending ? <LoaderCircle size={15} className="animate-spin" /> : <ArrowDownToLine size={15} />}{state.hasDrawn ? 'Card drawn' : state.drawPileCount === 0 ? 'End turn' : 'Draw a card'}</button></div></div>
+        <footer className="game-footer"><div className="footer-tools"><div><div className="action-status" data-testid="status-action">{isFinished ? `Round won by ${winner?.name || 'a player'}` : isYourTurn ? 'Your turn.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.name || 'Opponent'} has the turn.`}</div><div className="action-hint">{isYourTurn ? 'Play one matching card or draw one. Drawing ends your turn.' : 'Your cards are ready when the turn comes around.'}</div></div><div className="sidebar-actions">{!isFinished && <button className="btn-primary" disabled={mutationPending} onClick={callUno} data-testid="button-call-uno">{callUnoAction.isPending ? 'Calling…' : 'Call UNO!'}</button>}<button className="btn-secondary" disabled={!canDraw || mutationPending} onClick={drawOne} data-testid="button-draw-card">{draw.isPending ? <LoaderCircle size={15} className="animate-spin" /> : <ArrowDownToLine size={15} />}Draw one card</button></div></div>
         <div className="hand-row" aria-label="Your hand">{state.yourHand.map((card, index) => {
-          const playable = !isLobby && !isFinished && isYourTurn && isPlayable(card, state) && !mutationPending;
-          return <button key={card.id} className={`hand-card ${state.drawnCardId === card.id ? 'just-drawn' : ''}`} style={{ animationDelay: `${index * 35}ms` }} disabled={!playable} onClick={() => handleCard(card)} title={playable ? `Play ${card.label}` : card.label} data-testid={`button-card-${card.id}`}><CardFace card={card} /></button>;
+          const playable = !isLobby && !isFinished && isYourTurn && !openingColorPending && isPlayable(card, state) && !mutationPending;
+          return <button key={card.id} className="hand-card" style={{ animationDelay: `${index * 35}ms` }} disabled={!playable} onClick={() => handleCard(card)} title={playable ? `Play ${card.label}` : card.label} data-testid={`button-card-${card.id}`}><CardFace card={card} /></button>;
         })}</div>
       </footer>
     </>}
     {roomError && <div className="error-box" role="alert" style={{ position: 'fixed', right: 18, bottom: 18, zIndex: 8, maxWidth: 370 }} data-testid="status-action-error">{roomError}<button className="tiny-control" style={{ marginLeft: 10 }} onClick={() => setRoomError('')} data-testid="button-dismiss-error">Dismiss</button></div>}
     {unoFlash && <div className="uno-announcement" role="status" aria-live="assertive" data-testid="status-uno-call"><div className="uno-emoji" aria-hidden="true">🎉</div><span>UNO!</span><small>One card. Game on.</small></div>}
-    {pendingCard && <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="uno-title"><div className="modal-card"><div className="eyebrow">One card left</div><h2 id="uno-title" style={{ fontSize: 34, letterSpacing: '-.06em', margin: '8px 0' }}>Call it. Then play it.</h2><p style={{ color: '#71685f', lineHeight: 1.55 }}>This play leaves you with one card. Declare UNO in the same move to make it official.</p><div style={{ display: 'flex', alignItems: 'center', gap: 15, margin: '20px 0' }}><CardFace card={pendingCard} /><strong>{pendingCard.label}</strong></div><div style={{ display: 'flex', gap: 9 }}><button className="btn-primary" disabled={play.isPending} onClick={() => pendingCard.kind === 'wild' || pendingCard.kind === 'wild4' ? (setColorCard(pendingCard), setPendingCard(null)) : playCard(pendingCard)} data-testid="button-declare-uno">{play.isPending ? 'Playing…' : <>UNO — play it <ArrowRight size={16} /></>}</button><button className="btn-quiet" onClick={() => setPendingCard(null)} data-testid="button-cancel-uno">Not yet</button></div></div></div>}
-    {colorCard && <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="color-title"><div className="modal-card"><div className="eyebrow">A wild moment</div><h2 id="color-title" style={{ fontSize: 34, letterSpacing: '-.06em', margin: '8px 0' }}>Name the next color.</h2><p style={{ color: '#71685f' }}>Choose where the table goes next.</p><div className="color-options">{colorNames.map((color) => <button key={color} className={`color-choice card-${color}`} aria-label={`Choose ${color}`} onClick={() => playCard(colorCard!, color)} data-testid={`button-color-${color}`} />)}</div><button className="btn-quiet" onClick={() => setColorCard(null)} data-testid="button-cancel-color">Go back</button></div></div>}
+    {pendingCard && <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="uno-title"><div className="modal-card"><div className="eyebrow">One card left</div><h2 id="uno-title" style={{ fontSize: 34, letterSpacing: '-.06em', margin: '8px 0' }}>Call UNO or take the risk.</h2><p style={{ color: '#71685f', lineHeight: 1.55 }}>You can play without calling. If someone catches you before the next turn action, you draw three cards.</p><div style={{ display: 'flex', alignItems: 'center', gap: 15, margin: '20px 0' }}><CardFace card={pendingCard} /><strong>{pendingCard.label}</strong></div><div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}><button className="btn-primary" disabled={play.isPending} onClick={() => { if (pendingCard.kind === 'wild' || pendingCard.kind === 'wild4') { setDeclareUnoWithPendingCard(true); setColorCard(pendingCard); setPendingCard(null); } else playCard(pendingCard, undefined, true); }} data-testid="button-declare-uno">{play.isPending ? 'Playing…' : <>UNO — play it <ArrowRight size={16} /></>}</button><button className="btn-secondary" disabled={play.isPending} onClick={() => { if (pendingCard.kind === 'wild' || pendingCard.kind === 'wild4') { setDeclareUnoWithPendingCard(false); setColorCard(pendingCard); setPendingCard(null); } else playCard(pendingCard); }} data-testid="button-play-without-uno">Play without UNO</button><button className="btn-quiet" onClick={() => setPendingCard(null)} data-testid="button-cancel-uno">Cancel</button></div></div></div>}
+    {colorCard && <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="color-title"><div className="modal-card"><div className="eyebrow">{openingColorPending ? 'Opening card' : 'A wild moment'}</div><h2 id="color-title" style={{ fontSize: 34, letterSpacing: '-.06em', margin: '8px 0' }}>{openingColorPending ? 'Choose the starting color.' : 'Name the next color.'}</h2><p style={{ color: '#71685f' }}>Choose where the table goes next.</p><div className="color-options">{colorNames.map((color) => <button key={color} className={`color-choice card-${color}`} aria-label={`Choose ${color}`} onClick={() => { const selectedCard = colorCard; const declaresUno = declareUnoWithPendingCard; setDeclareUnoWithPendingCard(false); playCard(selectedCard, color, declaresUno); }} data-testid={`button-color-${color}`} />)}</div>{!openingColorPending && <button className="btn-quiet" onClick={() => { setColorCard(null); setDeclareUnoWithPendingCard(false); }} data-testid="button-cancel-color">Go back</button>}</div></div>}
   </main>;
 }
 
 function avatarColor(index: number) { return ['#315f54', '#bd684d', '#7274a0', '#c09035', '#50798a', '#8b6556'][index % 6]; }
 function colorHex(color: UnoColor | null) { return color ? ({ red: '#e65340', yellow: '#d9ad2d', green: '#31806e', blue: '#3d6f9b' }[color]) : '#d9ad2d'; }
 function isPlayable(card: GameCard, state: GameState) {
-  if (state.hasDrawn && state.drawnCardId !== card.id) return false;
   if (!state.topCard) return false;
-  if (card.kind === 'wild') return true;
-  if (card.kind === 'wild4') {
-    return !state.yourHand.some((held) => held.id !== card.id && held.color === state.currentColor);
-  }
+  if (card.kind === 'wild' || card.kind === 'wild4') return true;
   return card.color === state.currentColor || (card.kind === state.topCard.kind && card.kind !== 'number') || (card.kind === 'number' && card.value === state.topCard.value);
 }
 
