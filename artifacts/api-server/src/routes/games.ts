@@ -30,7 +30,10 @@ import {
   joinGame,
   passTurn,
   playCard,
+  resolveChallenge,
+  setHoverTelemetry,
   startGame,
+  toggleBluffing,
 } from "../lib/uno-game";
 
 const router: IRouter = Router();
@@ -60,7 +63,7 @@ router.post("/games", (req, res): void => {
     return;
   }
   try {
-    res.status(201).json(CreateGameResponse.parse(createGame(playerName)));
+    res.status(201).json(createGame(playerName));
   } catch (err) {
     sendError(req, res, err);
   }
@@ -73,7 +76,7 @@ router.get("/games/:code/players/:playerId", (req, res): void => {
     return;
   }
   try {
-    res.json(GetGameResponse.parse(getGame(params.data.code, params.data.playerId)));
+    res.json(getGame(params.data.code, params.data.playerId));
   } catch (err) {
     sendError(req, res, err);
   }
@@ -94,7 +97,7 @@ router.post("/games/:code/join", (req, res): void => {
     return;
   }
   try {
-    res.json(JoinGameResponse.parse(joinGame(params.data.code, playerName)));
+    res.json(joinGame(params.data.code, playerName));
   } catch (err) {
     sendError(req, res, err);
   }
@@ -110,9 +113,7 @@ router.post("/games/:code/start", (req, res): void => {
     return;
   }
   try {
-    res.json(
-      StartGameResponse.parse(startGame(params.data.code, body.data.playerId)),
-    );
+    res.json(startGame(params.data.code, body.data.playerId));
   } catch (err) {
     sendError(req, res, err);
   }
@@ -129,14 +130,12 @@ router.post("/games/:code/play", (req, res): void => {
   }
   try {
     res.json(
-      PlayCardResponse.parse(
-        playCard(
-          params.data.code,
-          body.data.playerId,
-          body.data.cardId,
-          body.data.chosenColor,
-          body.data.declareUno,
-        ),
+      playCard(
+        params.data.code,
+        body.data.playerId,
+        body.data.cardId,
+        body.data.chosenColor,
+        body.data.declareUno,
       ),
     );
   } catch (err) {
@@ -154,9 +153,7 @@ router.post("/games/:code/draw", (req, res): void => {
     return;
   }
   try {
-    res.json(
-      DrawCardResponse.parse(drawCard(params.data.code, body.data.playerId)),
-    );
+    res.json(drawCard(params.data.code, body.data.playerId));
   } catch (err) {
     sendError(req, res, err);
   }
@@ -172,7 +169,7 @@ router.post("/games/:code/uno", (req, res): void => {
     return;
   }
   try {
-    res.json(GetGameResponse.parse(callUno(params.data.code, body.data.playerId)));
+    res.json(callUno(params.data.code, body.data.playerId));
   } catch (err) {
     sendError(req, res, err);
   }
@@ -188,9 +185,8 @@ router.post("/games/:code/pass", (req, res): void => {
     return;
   }
   try {
-    res.json(
-      PassTurnResponse.parse(passTurn(params.data.code, body.data.playerId)),
-    );
+    const updatedState = passTurn(params.data.code, body.data.playerId);
+    res.json(updatedState);
   } catch (err) {
     sendError(req, res, err);
   }
@@ -215,15 +211,56 @@ router.post("/games/:code/callout", (req, res): void => {
     return;
   }
   try {
-    res.json(
-      GetGameResponse.parse(
-        callOutUno(
-          params.data.code,
-          body.playerId,
-          body.targetPlayerId,
-        ),
-      ),
-    );
+    res.json(callOutUno(params.data.code, body.playerId, body.targetPlayerId));
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+router.post("/games/:code/telemetry", (req, res): void => {
+  const params = GetGameParams.safeParse(req.params);
+  const body = req.body as { playerId?: unknown; cardIndex?: unknown } | null;
+  if (!params.success || !body || typeof body.playerId !== "string") {
+    res.status(400).json({ error: "Invalid request payload." });
+    return;
+  }
+  const cardIndex = typeof body.cardIndex === "number" ? body.cardIndex : null;
+  try {
+    res.json(setHoverTelemetry(params.data.code, body.playerId, cardIndex));
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+router.post("/games/:code/toggle-bluffing", (req, res): void => {
+  const params = GetGameParams.safeParse(req.params);
+  const body = req.body as { playerId?: unknown; allowed?: unknown } | null;
+  if (!params.success || !body || typeof body.playerId !== "string") {
+    res.status(400).json({ error: "Invalid request payload." });
+    return;
+  }
+  const allowed = typeof body.allowed === "boolean" ? body.allowed : undefined;
+  try {
+    res.json(toggleBluffing(params.data.code, body.playerId, allowed));
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+router.post("/games/:code/challenge", (req, res): void => {
+  const params = GetGameParams.safeParse(req.params);
+  const body = req.body as { playerId?: unknown; decision?: unknown } | null;
+  if (
+    !params.success ||
+    !body ||
+    typeof body.playerId !== "string" ||
+    (body.decision !== "accept" && body.decision !== "challenge")
+  ) {
+    res.status(400).json({ error: "decision must be 'accept' or 'challenge'." });
+    return;
+  }
+  try {
+    res.json(resolveChallenge(params.data.code, body.playerId, body.decision));
   } catch (err) {
     sendError(req, res, err);
   }
